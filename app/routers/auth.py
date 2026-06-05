@@ -30,6 +30,7 @@ def _auth_response(user) -> AuthResponse:
     responses={
         409: {"model": ErrorResponse, "description": "Email or username already in use."},
         422: {"model": ErrorResponse, "description": "Validation error."},
+        429: {"model": ErrorResponse, "description": "Rate limit exceeded."},
     },
 )
 @limiter.limit(settings.rate_limit_auth)
@@ -52,6 +53,7 @@ def register(
     responses={
         401: {"model": ErrorResponse, "description": "Invalid credentials."},
         422: {"model": ErrorResponse, "description": "Validation error."},
+        429: {"model": ErrorResponse, "description": "Rate limit exceeded."},
     },
 )
 @limiter.limit(settings.rate_limit_auth)

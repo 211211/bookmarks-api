@@ -94,11 +94,14 @@ def _apply_filters(
     if tag:
         stmt = stmt.where(Tag.name == tag.strip().lower())
     if q:
-        like = f"%{q.strip().lower()}%"
+        # Escape LIKE wildcards so a literal '%' or '_' in the query isn't
+        # treated as a pattern metacharacter.
+        term = q.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{term}%"
         stmt = stmt.where(
             or_(
-                func.lower(Bookmark.title).like(like),
-                func.lower(Bookmark.description).like(like),
+                func.lower(Bookmark.title).like(like, escape="\\"),
+                func.lower(Bookmark.description).like(like, escape="\\"),
             )
         )
     if date_from:
@@ -127,7 +130,8 @@ def list_bookmarks(
 
     Returns a dict with ``items`` and pagination metadata. Supports both
     offset pagination (``page``/``per_page``) and keyset/cursor pagination
-    (``cursor``) — when a cursor is supplied, results are ordered by id descending.
+    (``cursor``). When a cursor is supplied, results are always ordered by id
+    descending and the ``sort`` parameter is ignored.
     """
     per_page = max(1, min(per_page, MAX_PER_PAGE))
     join_tags = tag is not None
@@ -145,21 +149,25 @@ def list_bookmarks(
     data_stmt = _apply_filters(select(Bookmark), **filter_kwargs)
 
     if cursor is not None:
-        # Keyset pagination: stable, efficient, no large OFFSET scans.
+        # Keyset pagination: stable, efficient, no large OFFSET scans. Fetch one
+        # extra row to know whether a further page genuinely exists (avoids a
+        # trailing empty request when the total is an exact multiple of per_page).
         data_stmt = (
             data_stmt.where(Bookmark.id < cursor)
             .order_by(Bookmark.id.desc())
-            .limit(per_page)
+            .limit(per_page + 1)
         )
-        items = list(db.scalars(data_stmt).unique().all())
-        next_cursor = items[-1].id if len(items) == per_page else None
+        rows = list(db.scalars(data_stmt).unique().all())
+        has_more = len(rows) > per_page
+        items = rows[:per_page]
+        next_cursor = items[-1].id if (has_more and items) else None
         return {
             "items": items,
             "page": 1,
             "per_page": per_page,
             "total": total,
             "total_pages": math.ceil(total / per_page) if total else 0,
-            "has_next": next_cursor is not None,
+            "has_next": has_more,
             "has_prev": False,
             "next_cursor": next_cursor,
         }
