@@ -196,21 +196,44 @@ consistent error envelope, that **migrations run clean**, and **OpenAPI contract
 
 ---
 
+## Architecture (repository pattern)
+
+Each request flows through clean layers, each depending on the *interface* of the one below:
+
+```
+HTTP router  →  service (business logic)  →  repository (persistence)  →  ORM model
+                         ↘ utils (password hasher, token provider, tag normalizer)
+```
+
+Every model/service/repository/util has a dedicated `interface.py` (an abstract base class)
+and an implementation, so services are decoupled from persistence and unit-testable with fakes
+(see `tests/test_services.py` — no DB, no bcrypt). Dependency injection is wired in
+`app/core/deps.py`.
+
 ## Project structure
 
 ```
 app/
-  main.py            # app factory, middleware, exception handlers
-  config.py          # env-driven settings
-  database.py        # engine, session, Base
-  models/            # User, Bookmark, Tag, bookmark_tags
-  schemas/           # Pydantic request/response models
-  core/              # security, deps (auth), errors, rate limiting
-  crud/              # data-access layer (incl. raw-SQL stats)
-  routers/           # auth, bookmarks, stats
-alembic/             # migration environment + versions
-tests/               # pytest suite
-scripts/seed.py      # sample-data seeder
+  main.py                 # app factory, middleware, exception handlers
+  config.py               # env-driven settings
+  database.py             # engine, session, Base
+  models/                 # User, Bookmark, Tag, bookmark_tags (ORM)
+  schemas/                # Pydantic request/response models
+  core/                   # deps (DI wiring), errors, rate limiting
+  utils/
+    security/             # interface.py + password.py (bcrypt) + token.py (JWT)
+    tags/                 # interface.py + normalizer.py
+  repositories/
+    user/                 # interface.py (IUserRepository) + repository.py
+    bookmark/             #   ...one subpackage per entity...
+    tag/  ·  stats/
+  services/
+    auth/                 # interface.py (IAuthService) + service.py
+    bookmark/  ·  stats/
+  routers/                # auth, bookmarks, stats (depend on service interfaces)
+alembic/                  # migration environment + versions
+tests/                    # pytest suite (incl. service unit tests with fakes)
+scripts/seed.py           # sample-data seeder
 Containerfile · podman-compose.yml · entrypoint.sh
 ```
 
