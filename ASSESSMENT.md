@@ -252,6 +252,25 @@ pytest -q
 - [x] Rate limiting · [x] Podman setup · [x] Seed script · [x] Cursor pagination.
 
 ### Delivery
-- [x] Incremental, milestone-mapped commit history (10 commits).
+- [x] Incremental, milestone-mapped commit history (13 commits).
 - [x] README with setup, run, Podman, and API usage instructions.
 - [x] Repo initialized and ready to push to GitHub.
+
+---
+
+## 10. Post-Build Adversarial Review
+
+After the suite passed, an adversarial multi-dimension review (security, correctness,
+requirements, API contract, tests/ops) was run and each finding independently verified.
+Confirmed items were fixed:
+
+- **Security (critical):** the app now refuses to start outside `development` with a weak,
+  empty, or well-known default `JWT_SECRET` (prevents token forgery from a committed secret).
+- **Security:** switched password hashing to `bcrypt_sha256` (no silent 72-byte truncation);
+  the JWT `type` claim is now verified; login does constant-time work for unknown emails
+  (no user-enumeration timing side channel).
+- **Correctness:** fixed a cursor-pagination off-by-one (`has_next`/`next_cursor` at exact
+  page-size multiples) and escaped `LIKE` wildcards (`%`, `_`) in keyword search.
+- **API/Docs:** documented the `429` response and clarified cursor/date-range query semantics.
+- **Tests:** added expired-token, wrong-token-type, FK-cascade, date/cursor boundary, and a
+  migration-drift (`alembic check`) test. Suite: **40 passing**.
