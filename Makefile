@@ -16,7 +16,7 @@ endif
 
 .PHONY: help venv install migrate makemigration downgrade run seed seed-reset \
         test cov lint format check openapi db-reset clean \
-        podman-build podman-up podman-down podman-logs podman-ps
+        build up down logs ps
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -75,20 +75,20 @@ openapi: ## Export the OpenAPI spec to openapi.json
 	$(PY) -c "import json; from app.main import app; open('openapi.json','w').write(json.dumps(app.openapi(), indent=2))"
 	@echo "wrote openapi.json"
 
-# ── Podman ─────────────────────────────────────────────────────────────────
-podman-build: ## Build the API image
+# ── Podman (compose stack: API + PostgreSQL) ───────────────────────────────
+build: ## Build the API image
 	podman-compose build
 
-podman-up: ## Build & start the stack (API + PostgreSQL)
+up: ## Build & start the stack (API + PostgreSQL)
 	podman-compose up --build
 
-podman-down: ## Stop and remove the stack (use ARGS=-v to drop data)
+down: ## Stop and remove the stack (use ARGS=-v to drop data)
 	podman-compose down $(ARGS)
 
-podman-logs: ## Tail API logs
+logs: ## Tail API logs
 	podman-compose logs -f api
 
-podman-ps: ## Show stack containers
+ps: ## Show stack containers
 	podman-compose ps
 
 # ── Housekeeping ───────────────────────────────────────────────────────────
