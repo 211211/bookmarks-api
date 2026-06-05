@@ -30,7 +30,11 @@ services:
     image: bookmarks-api:latest
     environment:
       DATABASE_URL: postgresql+psycopg://bookmarks:bookmarks@db:5432/bookmarks
-      JWT_SECRET: change-me-to-a-long-random-string-in-production
+      # This is a LOCAL DEMO stack. For production set ENVIRONMENT=production and
+      # supply a strong JWT_SECRET (the app refuses to boot otherwise) e.g.:
+      #   JWT_SECRET: ${JWT_SECRET:?generate with: python -c 'import secrets;print(secrets.token_urlsafe(48))'}
+      ENVIRONMENT: development
+      JWT_SECRET: local-demo-only-secret-not-for-production-use-32+chars
       JWT_EXPIRES_MINUTES: "1440"
       RATE_LIMIT_ENABLED: "true"
     depends_on:

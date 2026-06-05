@@ -9,6 +9,10 @@ from app.core.errors import AuthError, ConflictError
 from app.core.security import hash_password, verify_password
 from app.models import User
 
+# A precomputed hash used to perform identical work when the email is unknown,
+# so login timing doesn't reveal whether an account exists (user enumeration).
+_DUMMY_HASH = hash_password("a-non-matching-dummy-password")
+
 
 def get_by_email(db: Session, email: str) -> User | None:
     return db.scalar(select(User).where(func.lower(User.email) == email.strip().lower()))
@@ -44,6 +48,11 @@ def authenticate(db: Session, *, email: str, password: str) -> User:
     """Verify credentials. Raises ``AuthError`` (401) on any mismatch, using a
     single generic message so we don't reveal whether the email exists."""
     user = get_by_email(db, email)
-    if user is None or not verify_password(password, user.password_hash):
+    if user is None:
+        # Verify against a dummy hash so the response time matches the
+        # wrong-password path and doesn't leak whether the email exists.
+        verify_password(password, _DUMMY_HASH)
+        raise AuthError("Invalid email or password.")
+    if not verify_password(password, user.password_hash):
         raise AuthError("Invalid email or password.")
     return user

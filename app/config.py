@@ -2,7 +2,18 @@
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Known placeholder secrets that must never be used outside local development.
+_PLACEHOLDER_SECRETS = {
+    "",
+    "secret",
+    "change-me",
+    "dev-secret-change-me-to-a-long-random-string-please",
+    "change-me-to-a-long-random-string-in-production",
+}
+_DEV_ENVIRONMENTS = {"development", "dev", "local", "test", "testing"}
 
 
 class Settings(BaseSettings):
@@ -39,6 +50,19 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @model_validator(mode="after")
+    def _enforce_strong_secret(self) -> "Settings":
+        """Fail closed: outside development, refuse to start with a weak, empty,
+        or well-known default JWT secret (which would allow token forgery)."""
+        if self.environment.lower() not in _DEV_ENVIRONMENTS:
+            if self.jwt_secret in _PLACEHOLDER_SECRETS or len(self.jwt_secret) < 32:
+                raise ValueError(
+                    "JWT_SECRET must be a strong, unique value of at least 32 characters "
+                    "outside development. Generate one with: "
+                    "python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+                )
+        return self
 
 
 @lru_cache

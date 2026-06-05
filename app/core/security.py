@@ -23,9 +23,11 @@ from app.config import get_settings  # noqa: E402
 
 settings = get_settings()
 
-# bcrypt is a one-way password *hash* (with per-password salt) — never reversible
-# encryption. `deprecated="auto"` lets us migrate schemes later transparently.
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# One-way password *hash* (with per-password salt) — never reversible encryption.
+# `bcrypt_sha256` HMAC-pre-hashes the password so the full input is used (plain
+# bcrypt silently ignores bytes past 72). `deprecated="auto"` allows transparent
+# scheme migration later.
+pwd_context = CryptContext(schemes=["bcrypt_sha256"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
@@ -52,9 +54,12 @@ def create_access_token(subject: int | str, expires_minutes: int | None = None) 
 def decode_access_token(token: str) -> dict:
     """Decode and verify a JWT. Raises ``jwt.ExpiredSignatureError`` /
     ``jwt.InvalidTokenError`` on failure."""
-    return jwt.decode(
+    payload = jwt.decode(
         token,
         settings.jwt_secret,
         algorithms=[settings.jwt_algorithm],
         options={"require": ["exp", "iat", "sub"]},
     )
+    if payload.get("type") != "access":
+        raise jwt.InvalidTokenError("Unexpected token type.")
+    return payload
