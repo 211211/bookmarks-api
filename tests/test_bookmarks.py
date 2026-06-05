@@ -69,7 +69,8 @@ def test_delete_bookmark(client, alice):
     resp = client.delete(f"/api/bookmarks/{created['id']}", headers=alice["headers"])
     assert resp.status_code == 204
     # Now gone.
-    assert client.get(f"/api/bookmarks/{created['id']}", headers=alice["headers"]).status_code == 404
+    gone = client.get(f"/api/bookmarks/{created['id']}", headers=alice["headers"])
+    assert gone.status_code == 404
 
 
 def test_ownership_isolation(client, alice, bob):

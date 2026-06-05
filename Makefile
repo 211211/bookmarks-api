@@ -1,38 +1,98 @@
-.PHONY: help install migrate run seed test lint podman-up podman-down podman-logs clean
+# Bookmarks API — developer task runner.
+# Run `make` (or `make help`) to list targets.
+.DEFAULT_GOAL := help
 
-help:  ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+VENV ?= .venv
+HOST ?= 127.0.0.1
+PORT ?= 8000
 
-install:  ## Install runtime + dev dependencies
-	python -m pip install --upgrade pip
-	pip install -r requirements-dev.txt
+# Use the project venv if present, otherwise fall back to system python3 so the
+# targets work whether or not a venv has been created/activated.
+ifeq ($(wildcard $(VENV)/bin/python),)
+PY := python3
+else
+PY := $(VENV)/bin/python
+endif
 
-migrate:  ## Apply database migrations
-	alembic upgrade head
+.PHONY: help venv install migrate makemigration downgrade run seed seed-reset \
+        test cov lint format check openapi db-reset clean \
+        podman-build podman-up podman-down podman-logs podman-ps
 
-run:  ## Start the dev server (reload) on :8000
-	uvicorn app.main:app --reload
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-seed:  ## Populate sample data
-	python -m scripts.seed
+# ── Setup ──────────────────────────────────────────────────────────────────
+venv: ## Create the virtualenv (.venv)
+	python3 -m venv $(VENV)
+	$(VENV)/bin/python -m pip install --upgrade pip
 
-test:  ## Run the test suite
-	pytest
+install: venv ## Create venv + install dev dependencies
+	$(VENV)/bin/pip install -r requirements-dev.txt
 
-lint:  ## Lint with ruff (if installed)
-	ruff check .
+# ── Database / migrations ──────────────────────────────────────────────────
+migrate: ## Apply all migrations (upgrade head)
+	$(PY) -m alembic upgrade head
 
-podman-up:  ## Build & start the Podman stack (API + PostgreSQL)
+makemigration: ## Autogenerate a migration: make makemigration m="message"
+	$(PY) -m alembic revision --autogenerate -m "$(m)"
+
+downgrade: ## Roll back the most recent migration
+	$(PY) -m alembic downgrade -1
+
+db-reset: ## Delete the local SQLite db, then migrate + seed
+	rm -f bookmarks.db
+	$(PY) -m alembic upgrade head
+	$(PY) -m scripts.seed
+
+# ── Run / data ─────────────────────────────────────────────────────────────
+run: ## Run the dev server with autoreload (HOST/PORT overridable)
+	$(PY) -m uvicorn app.main:app --reload --host $(HOST) --port $(PORT)
+
+seed: ## Populate sample data
+	$(PY) -m scripts.seed
+
+seed-reset: ## Wipe and reseed sample data
+	$(PY) -m scripts.seed --reset
+
+# ── Quality ────────────────────────────────────────────────────────────────
+test: ## Run the test suite
+	$(PY) -m pytest
+
+cov: ## Run tests with a coverage report
+	$(PY) -m pytest --cov=app --cov-report=term-missing
+
+lint: ## Lint with ruff
+	$(PY) -m ruff check .
+
+format: ## Auto-format and fix with ruff
+	$(PY) -m ruff format .
+	$(PY) -m ruff check --fix .
+
+check: lint test ## Lint + test (CI gate)
+
+openapi: ## Export the OpenAPI spec to openapi.json
+	$(PY) -c "import json; from app.main import app; open('openapi.json','w').write(json.dumps(app.openapi(), indent=2))"
+	@echo "wrote openapi.json"
+
+# ── Podman ─────────────────────────────────────────────────────────────────
+podman-build: ## Build the API image
+	podman-compose build
+
+podman-up: ## Build & start the stack (API + PostgreSQL)
 	podman-compose up --build
 
-podman-down:  ## Stop and remove the Podman stack
-	podman-compose down
+podman-down: ## Stop and remove the stack (use ARGS=-v to drop data)
+	podman-compose down $(ARGS)
 
-podman-logs:  ## Tail API logs
+podman-logs: ## Tail API logs
 	podman-compose logs -f api
 
-clean:  ## Remove local SQLite db and caches
-	rm -f bookmarks.db
+podman-ps: ## Show stack containers
+	podman-compose ps
+
+# ── Housekeeping ───────────────────────────────────────────────────────────
+clean: ## Remove local db, generated specs, and caches
+	rm -f bookmarks.db openapi.json
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
-	rm -rf .pytest_cache .ruff_cache
+	rm -rf .pytest_cache .ruff_cache .mypy_cache htmlcov .coverage

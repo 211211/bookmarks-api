@@ -57,7 +57,9 @@ def test_date_range_filter(client, alice):
     assert resp.json()["pagination"]["total"] == 0
     # A wide range includes all four.
     resp = client.get(
-        "/api/bookmarks", params={"from": "2000-01-01", "to": "2999-12-31"}, headers=alice["headers"]
+        "/api/bookmarks",
+        params={"from": "2000-01-01", "to": "2999-12-31"},
+        headers=alice["headers"],
     )
     assert resp.json()["pagination"]["total"] == 4
     # Inclusive same-day boundary: from=today AND to=today must include all four

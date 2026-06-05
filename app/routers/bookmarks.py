@@ -74,10 +74,14 @@ def list_bookmarks(
     tag: str | None = Query(None, description="Filter by exact tag name."),
     q: str | None = Query(None, description="Keyword searched in title and description."),
     date_from: date | None = Query(
-        None, alias="from", description="Created on or after this date (YYYY-MM-DD, UTC, inclusive)."
+        None,
+        alias="from",
+        description="Created on or after this date (YYYY-MM-DD, UTC, inclusive).",
     ),
     date_to: date | None = Query(
-        None, alias="to", description="Created on or before this date (YYYY-MM-DD, UTC, inclusive)."
+        None,
+        alias="to",
+        description="Created on or before this date (YYYY-MM-DD, UTC, inclusive).",
     ),
     page: int = Query(1, ge=1, description="1-based page number (offset pagination)."),
     per_page: int = Query(20, ge=1, le=100, description="Items per page (max 100)."),

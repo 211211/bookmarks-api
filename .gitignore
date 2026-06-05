@@ -23,9 +23,13 @@ env/
 # Test / coverage artifacts
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+
+# Generated OpenAPI export (make openapi)
+openapi.json
 
 # Editor / OS
 .idea/

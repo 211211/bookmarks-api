@@ -38,7 +38,9 @@ def test_swagger_docs_served(client):
 
 def test_security_scheme_documented(spec):
     schemes = spec.get("components", {}).get("securitySchemes", {})
-    bearer = [s for s in schemes.values() if s.get("type") == "http" and s.get("scheme") == "bearer"]
+    bearer = [
+        s for s in schemes.values() if s.get("type") == "http" and s.get("scheme") == "bearer"
+    ]
     assert bearer, "A bearer (JWT) security scheme must be documented."
 
     # Protected operations must declare a security requirement.
