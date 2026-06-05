@@ -1,0 +1,43 @@
+# Provisions the full backend with Podman: a PostgreSQL database and the API.
+#
+#   podman-compose up --build
+#
+# The API waits for the database, applies migrations, then serves on :8000.
+services:
+  db:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_USER: bookmarks
+      POSTGRES_PASSWORD: bookmarks
+      POSTGRES_DB: bookmarks
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Host port 55432 -> container 5432 (avoids clashing with a local Postgres).
+      # The API talks to the DB internally over `db:5432`, so this is only for
+      # optional host access (e.g. psql from your machine).
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookmarks -d bookmarks"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: bookmarks-api:latest
+    environment:
+      DATABASE_URL: postgresql+psycopg://bookmarks:bookmarks@db:5432/bookmarks
+      JWT_SECRET: change-me-to-a-long-random-string-in-production
+      JWT_EXPIRES_MINUTES: "1440"
+      RATE_LIMIT_ENABLED: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
