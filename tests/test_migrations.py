@@ -30,5 +30,10 @@ def test_migrations_upgrade_and_downgrade(tmp_path):
     assert up.returncode == 0, f"upgrade failed:\n{up.stdout}\n{up.stderr}"
     assert db_file.exists()
 
+    # The migrated schema must match the ORM models (no drift): `alembic check`
+    # exits non-zero if autogenerate would produce any new operations.
+    check = _run_alembic(["check"], db_url)
+    assert check.returncode == 0, f"migration drifted from models:\n{check.stdout}\n{check.stderr}"
+
     down = _run_alembic(["downgrade", "base"], db_url)
     assert down.returncode == 0, f"downgrade failed:\n{down.stdout}\n{down.stderr}"

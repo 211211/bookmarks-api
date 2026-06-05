@@ -1,5 +1,7 @@
 """Search, filtering, and pagination on the list endpoint."""
 
+from datetime import datetime, timedelta, timezone
+
 
 def _seed_bookmarks(client, headers):
     rows = [
@@ -46,7 +48,11 @@ def test_combined_tag_and_keyword(client, alice):
 
 def test_date_range_filter(client, alice):
     _seed_bookmarks(client, alice["headers"])
-    # Everything was created today; an old upper bound excludes all.
+    today = datetime.now(timezone.utc).date()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    tomorrow = (today + timedelta(days=1)).isoformat()
+
+    # An old upper bound excludes all.
     resp = client.get("/api/bookmarks", params={"to": "2000-01-01"}, headers=alice["headers"])
     assert resp.json()["pagination"]["total"] == 0
     # A wide range includes all four.
@@ -54,6 +60,20 @@ def test_date_range_filter(client, alice):
         "/api/bookmarks", params={"from": "2000-01-01", "to": "2999-12-31"}, headers=alice["headers"]
     )
     assert resp.json()["pagination"]["total"] == 4
+    # Inclusive same-day boundary: from=today AND to=today must include all four
+    # (exercises the time.min/time.max UTC expansion of the date bounds).
+    resp = client.get(
+        "/api/bookmarks",
+        params={"from": today.isoformat(), "to": today.isoformat()},
+        headers=alice["headers"],
+    )
+    assert resp.json()["pagination"]["total"] == 4
+    # A lower bound of tomorrow excludes everything created today.
+    resp = client.get("/api/bookmarks", params={"from": tomorrow}, headers=alice["headers"])
+    assert resp.json()["pagination"]["total"] == 0
+    # An upper bound of yesterday excludes everything created today.
+    resp = client.get("/api/bookmarks", params={"to": yesterday}, headers=alice["headers"])
+    assert resp.json()["pagination"]["total"] == 0
 
 
 def test_pagination_total_count(client, alice):
@@ -77,19 +97,27 @@ def test_pagination_total_count(client, alice):
 
 
 def test_cursor_pagination(client, alice):
-    _seed_bookmarks(client, alice["headers"])
-    first = client.get(
-        "/api/bookmarks", params={"per_page": 2, "cursor": 999999}, headers=alice["headers"]
-    ).json()
-    assert len(first["items"]) == 2
-    assert first["pagination"]["next_cursor"] is not None
+    _seed_bookmarks(client, alice["headers"])  # 4 bookmarks, per_page=2 → exact multiple
 
-    cursor = first["pagination"]["next_cursor"]
-    second = client.get(
-        "/api/bookmarks", params={"per_page": 2, "cursor": cursor}, headers=alice["headers"]
-    ).json()
-    assert len(second["items"]) == 2
-    # No overlap between pages.
-    first_ids = {b["id"] for b in first["items"]}
-    second_ids = {b["id"] for b in second["items"]}
-    assert first_ids.isdisjoint(second_ids)
+    seen: list[int] = []
+    cursor = 999999
+    pages = 0
+    while True:
+        body = client.get(
+            "/api/bookmarks", params={"per_page": 2, "cursor": cursor}, headers=alice["headers"]
+        ).json()
+        ids = [b["id"] for b in body["items"]]
+        seen.extend(ids)
+        pages += 1
+        if not body["pagination"]["has_next"]:
+            # Terminator: the final page reports no next page and a null cursor,
+            # even though it was a full page (4 is an exact multiple of 2).
+            assert body["pagination"]["next_cursor"] is None
+            break
+        cursor = body["pagination"]["next_cursor"]
+        assert cursor is not None
+        assert pages < 10  # guard against an infinite loop
+
+    # Exactly two full pages, no overlap, full coverage — no trailing empty request.
+    assert pages == 2
+    assert len(seen) == len(set(seen)) == 4

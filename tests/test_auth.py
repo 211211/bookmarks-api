@@ -1,5 +1,11 @@
 """Authentication: registration, login, and protected-route enforcement."""
 
+from datetime import datetime, timedelta, timezone
+
+import jwt as pyjwt
+
+from app.config import get_settings
+from app.core.security import create_access_token
 from tests.conftest import auth_header, register
 
 
@@ -63,4 +69,26 @@ def test_protected_route_requires_token(client):
 
 def test_protected_route_rejects_garbage_token(client):
     resp = client.get("/api/bookmarks", headers=auth_header("not.a.jwt"))
+    assert resp.status_code == 401
+
+
+def test_expired_token_rejected(client, alice):
+    token = create_access_token(alice["user"]["id"], expires_minutes=-1)
+    resp = client.get("/api/bookmarks", headers=auth_header(token))
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "AUTHENTICATION_ERROR"
+
+
+def test_wrong_token_type_rejected(client, alice):
+    """A correctly-signed but non-'access' token must be rejected."""
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(alice["user"]["id"]),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=5)).timestamp()),
+        "type": "refresh",
+    }
+    token = pyjwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+    resp = client.get("/api/bookmarks", headers=auth_header(token))
     assert resp.status_code == 401
