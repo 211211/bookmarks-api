@@ -46,10 +46,48 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_default: str = "120/minute"
     rate_limit_auth: str = "15/minute"
+    # When True, the rate limiter derives the client IP from X-Forwarded-For
+    # (only safe behind a trusted reverse proxy that sets it).
+    trust_proxy_headers: bool = False
+
+    # HTTP hardening
+    cors_origins: str = "*"  # comma-separated allow-list; "*" = any origin
+    cors_allow_credentials: bool = False
+    trusted_hosts: str = "*"  # comma-separated Host allow-list; "*" = any
+    security_headers_enabled: bool = True
+    hsts_enabled: bool = False  # enable only when served over HTTPS
+    max_request_bytes: int = 1_048_576  # 1 MiB cap on request bodies
+    docs_enabled: bool = True  # serve /docs, /redoc, /openapi.json
+
+    # Login abuse protection (per-account, defense-in-depth beyond the IP limit)
+    login_max_failures: int = 10
+    login_lockout_seconds: int = 300
+
+    # Database connection pool (ignored on SQLite)
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle_seconds: int = 1800
+    db_pool_timeout: int = 30
 
     @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.lower() not in _DEV_ENVIRONMENTS
+
+    @staticmethod
+    def _csv(value: str) -> list[str]:
+        return [item.strip() for item in value.split(",") if item.strip()]
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return ["*"] if self.cors_origins.strip() == "*" else self._csv(self.cors_origins)
+
+    @property
+    def trusted_host_list(self) -> list[str]:
+        return ["*"] if self.trusted_hosts.strip() == "*" else self._csv(self.trusted_hosts)
 
     @model_validator(mode="after")
     def _enforce_strong_secret(self) -> "Settings":

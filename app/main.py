@@ -6,10 +6,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
 from app.config import get_settings
 from app.core.errors import register_exception_handlers
+from app.core.middleware import (
+    MaxBodySizeMiddleware,
+    RequestIDMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.routers import auth, bookmarks, stats
 
@@ -34,15 +40,20 @@ OPENAPI_TAGS = [
 
 
 def create_app() -> FastAPI:
+    # Interactive docs can be disabled (e.g. in production) via DOCS_ENABLED.
+    docs_kwargs = (
+        {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"}
+        if settings.docs_enabled
+        else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    )
     app = FastAPI(
         title=settings.app_name,
         version=__version__,
         description=DESCRIPTION,
         openapi_tags=OPENAPI_TAGS,
-        docs_url="/docs",
-        redoc_url="/redoc",
         contact={"name": "Bookmarks API"},
         license_info={"name": "MIT"},
+        **docs_kwargs,
     )
 
     # ── Rate limiting (bonus) ──────────────────────────────────────────────
@@ -50,11 +61,23 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
 
-    # ── CORS (open in dev; tighten origins for production) ─────────────────
+    # ── HTTP hardening ─────────────────────────────────────────────────────
+    # NOTE: Starlette runs middleware in reverse registration order, so register
+    # these before CORS/rate-limit-sensitive ones as appropriate.
+    if settings.security_headers_enabled:
+        app.add_middleware(SecurityHeadersMiddleware, hsts=settings.hsts_enabled)
+    app.add_middleware(MaxBodySizeMiddleware, max_bytes=settings.max_request_bytes)
+    app.add_middleware(RequestIDMiddleware)
+
+    # Reject requests with an untrusted Host header (mitigates host-header attacks).
+    if settings.trusted_host_list != ["*"]:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_host_list)
+
+    # ── CORS (configurable allow-list; defaults to any origin in dev) ──────
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=settings.cors_allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -72,8 +95,8 @@ def create_app() -> FastAPI:
         return {
             "service": settings.app_name,
             "version": __version__,
-            "docs": "/docs",
-            "openapi": "/openapi.json",
+            "docs": "/docs" if settings.docs_enabled else None,
+            "openapi": "/openapi.json" if settings.docs_enabled else None,
         }
 
     @app.get("/health", tags=["health"], summary="Liveness probe")
