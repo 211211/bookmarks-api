@@ -21,8 +21,8 @@ source .venv/bin/activate
 ### 1.2 Run
 
 ```bash
-make test             # run the full pytest suite        → expect: 47 passed
-make cov              # tests + coverage report          → expect: ~96% TOTAL
+make test             # run the full pytest suite        → expect: 59 passed
+make cov              # tests + coverage report          → expect: ~95% TOTAL
 make lint             # ruff                              → expect: All checks passed!
 make check            # lint + test together (CI gate)
 ```
@@ -40,7 +40,8 @@ make check            # lint + test together (CI gate)
 | `tests/test_migrations.py` | migrations `upgrade head` + `downgrade base` run clean, **no model drift** (`alembic check`). |
 | `tests/test_cascade.py`    | deleting a user cascades to bookmarks + m2m links. |
 | `tests/test_rate_limit.py` | a tripped limit returns `429` in the envelope. |
-| `tests/test_services.py`   | **service layer in isolation** against fake repositories (no DB / bcrypt / HTTP). |
+| `tests/test_etag.py`       | ETag/`If-Match` optimistic concurrency: 428 (missing), 412 (stale), 200 (match), lost-update prevention. |
+| `tests/test_services.py`   | **service layer in isolation** against fake repositories (no DB / bcrypt / HTTP), incl. concurrency. |
 
 ---
 
@@ -183,6 +184,40 @@ curl -s -X PUT "http://127.0.0.1:8000/api/bookmarks/1" \
 ```
 ✅ **200**; `title` updated, `tags` now `["backend","sql"]` (sorted), `updated_at` bumped.
 
+### Step 13b — Optimistic concurrency (ETag / If-Match)
+
+```bash
+# Read the current ETag of bookmark 1
+ETAG=$(curl -s -D - -o /dev/null "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" | awk -F': ' 'tolower($1)=="etag"{print $2}' | tr -d '\r')
+echo "ETag = $ETAG"
+
+# (a) Update WITHOUT If-Match → rejected
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"title":"x"}'
+# ✅ 428 (PRECONDITION_REQUIRED)
+
+# (b) Update with a STALE If-Match → conflict
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" -H 'If-Match: "999"' -H 'Content-Type: application/json' -d '{"title":"x"}'
+# ✅ 412 (PRECONDITION_FAILED)
+
+# (c) Update with the CORRECT ETag → succeeds, version bumps
+curl -s -X PUT "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" -H "If-Match: $ETAG" \
+  -H 'Content-Type: application/json' -d '{"title":"Conditionally updated"}'
+# ✅ 200; response body "version" increased and a new ETag header is returned
+
+# (d) Re-using the OLD ETag now → 412 (lost-update prevented)
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" -H "If-Match: $ETAG" -H 'Content-Type: application/json' -d '{"title":"y"}'
+# ✅ 412
+```
+
+> Tip: the genuine *concurrent-write* race (two writers passing the check at the same instant)
+> is also blocked at the database level by the `version` column (`version_id_col`). The
+> automated proof is `tests/test_etag.py::test_lost_update_is_prevented`.
+
 ### Step 14 — Stats (raw SQL)
 ```bash
 curl -s "http://127.0.0.1:8000/api/bookmarks/stats" -H "Authorization: Bearer $TOKEN"
@@ -270,12 +305,13 @@ make down ARGS=-v    # drop the database volume too
 
 ## Quick checklist
 
-- [ ] `make check` → lint clean + 47 passed
-- [ ] `make cov` → ~96%
+- [ ] `make check` → lint clean + 59 passed
+- [ ] `make cov` → ~95%
 - [ ] Health, register, login work
 - [ ] Auth required (401 without token)
 - [ ] Create / list / get / update / delete bookmark
 - [ ] Filter by `tag`, search `q`, date range, pagination (offset + cursor)
+- [ ] Optimistic concurrency: PUT/DELETE without `If-Match` → 428, stale → 412, correct → 200/204
 - [ ] Stats returns totals + top tags + per-month
 - [ ] Ownership isolation (cross-user → 404)
 - [ ] Validation (422), duplicate (409), wrong password (401)

@@ -274,3 +274,19 @@ Confirmed items were fixed:
 - **API/Docs:** documented the `429` response and clarified cursor/date-range query semantics.
 - **Tests:** added expired-token, wrong-token-type, FK-cascade, date/cursor boundary, and a
   migration-drift (`alembic check`) test. Suite: **40 passing**.
+
+---
+
+## 11. Post-Build Enhancements
+
+Beyond the original brief, the following were added (see `README.md` / `TESTING.md`):
+
+- **Repository pattern** — layered `router → service → repository` with an interface per
+  model/service/repository/util (`app/repositories`, `app/services`, `app/utils`).
+- **Optimistic concurrency (ETag / If-Match)** to prevent lost updates / race conditions:
+  bookmarks carry a `version` counter (`bookmarks.version`, migration `0002`); single-bookmark
+  responses return a strong `ETag`; `PUT`/`DELETE` require `If-Match` (**428** if missing,
+  **412** if stale). Protection is two-layered — an application-level `If-Match` check **and**
+  a SQLAlchemy `version_id_col` so the conditional `UPDATE ... WHERE version = <expected>` is
+  atomic at the database level (a genuine concurrent commit raises a conflict → 412).
+- Test suite expanded to **59 tests** (adds `tests/test_etag.py` + service-layer concurrency tests).
