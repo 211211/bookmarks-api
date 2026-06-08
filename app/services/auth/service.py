@@ -8,6 +8,7 @@ from app.core.errors import AuthError, ConflictError
 from app.models import User
 from app.repositories.user.interface import IUserRepository
 from app.services.auth.interface import IAuthService
+from app.utils.login_guard.interface import ILoginGuard
 from app.utils.security.interface import IPasswordHasher, ITokenProvider
 
 
@@ -24,10 +25,12 @@ class AuthService(IAuthService):
         users: IUserRepository,
         hasher: IPasswordHasher,
         tokens: ITokenProvider,
+        login_guard: ILoginGuard,
     ) -> None:
         self._users = users
         self._hasher = hasher
         self._tokens = tokens
+        self._login_guard = login_guard
 
     def register(self, *, username: str, email: str, password: str) -> tuple[User, str]:
         email = email.strip().lower()
@@ -47,11 +50,18 @@ class AuthService(IAuthService):
         return user, self._tokens.create_access_token(user.id)
 
     def login(self, *, email: str, password: str) -> tuple[User, str]:
+        # Per-account lockout (defense-in-depth beyond the per-IP rate limit).
+        self._login_guard.assert_not_locked(email)
+
         user = self._users.get_by_email(email)
         if user is None:
             # Constant-time work so timing doesn't reveal whether the email exists.
             self._hasher.verify(password, _dummy_hash(self._hasher))
+            self._login_guard.record_failure(email)
             raise AuthError("Invalid email or password.")
         if not self._hasher.verify(password, user.password_hash):
+            self._login_guard.record_failure(email)
             raise AuthError("Invalid email or password.")
+
+        self._login_guard.record_success(email)
         return user, self._tokens.create_access_token(user.id)

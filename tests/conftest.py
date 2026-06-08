@@ -52,6 +52,11 @@ app.dependency_overrides[get_db] = _override_get_db
 def _fresh_schema():
     """Create a clean schema for every test, then drop it."""
     Base.metadata.create_all(bind=test_engine)
+    # Reset the process-wide login-guard singleton so lockout state doesn't leak
+    # between tests.
+    from app.core.deps import _login_guard
+
+    _login_guard.clear()
     yield
     Base.metadata.drop_all(bind=test_engine)
 

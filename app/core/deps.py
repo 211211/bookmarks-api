@@ -33,6 +33,8 @@ from app.services.stats.interface import IStatsService
 from app.services.stats.service import StatsService
 from app.utils.etag.etag import VersionETagService
 from app.utils.etag.interface import IETagService
+from app.utils.login_guard.guard import InMemoryLoginGuard
+from app.utils.login_guard.interface import ILoginGuard
 from app.utils.security.interface import IPasswordHasher, ITokenProvider
 from app.utils.security.password import BcryptPasswordHasher
 from app.utils.security.token import JwtTokenProvider
@@ -50,6 +52,10 @@ _token_provider: ITokenProvider = JwtTokenProvider(
 )
 _tag_normalizer: ITagNormalizer = TagNormalizer()
 _etag_service: IETagService = VersionETagService()
+_login_guard: ILoginGuard = InMemoryLoginGuard(
+    max_failures=_settings.login_max_failures,
+    lockout_seconds=_settings.login_lockout_seconds,
+)
 
 
 def get_password_hasher() -> IPasswordHasher:
@@ -66,6 +72,10 @@ def get_tag_normalizer() -> ITagNormalizer:
 
 def get_etag_service() -> IETagService:
     return _etag_service
+
+
+def get_login_guard() -> ILoginGuard:
+    return _login_guard
 
 
 # ── Repositories (per request, bound to the session) ───────────────────────
@@ -90,8 +100,9 @@ def get_auth_service(
     users: IUserRepository = Depends(get_user_repository),
     hasher: IPasswordHasher = Depends(get_password_hasher),
     tokens: ITokenProvider = Depends(get_token_provider),
+    login_guard: ILoginGuard = Depends(get_login_guard),
 ) -> IAuthService:
-    return AuthService(users, hasher, tokens)
+    return AuthService(users, hasher, tokens, login_guard)
 
 
 def get_bookmark_service(

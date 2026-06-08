@@ -85,6 +85,13 @@ class PreconditionFailedError(AppError):
     code = "PRECONDITION_FAILED"
 
 
+class TooManyAttemptsError(AppError):
+    """Account temporarily locked after too many failed login attempts."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "TOO_MANY_ATTEMPTS"
+
+
 # Maps HTTP status codes to stable, machine-readable error codes.
 _STATUS_TO_CODE: dict[int, str] = {
     400: "BAD_REQUEST",

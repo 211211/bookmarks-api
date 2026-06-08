@@ -21,6 +21,7 @@ from app.repositories.user.interface import IUserRepository
 from app.services.auth.service import AuthService
 from app.services.bookmark.service import BookmarkService
 from app.utils.etag.etag import VersionETagService
+from app.utils.login_guard.guard import InMemoryLoginGuard
 from app.utils.security.interface import IPasswordHasher, ITokenProvider
 from app.utils.tags.normalizer import TagNormalizer
 
@@ -122,7 +123,8 @@ class FakeTokenProvider(ITokenProvider):
 
 # ── AuthService ─────────────────────────────────────────────────────────────
 def _auth_service():
-    return AuthService(FakeUserRepository(), FakePasswordHasher(), FakeTokenProvider())
+    guard = InMemoryLoginGuard(max_failures=10, lockout_seconds=300)
+    return AuthService(FakeUserRepository(), FakePasswordHasher(), FakeTokenProvider(), guard)
 
 
 def test_register_returns_user_and_token():
