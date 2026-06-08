@@ -15,7 +15,7 @@ PY := $(VENV)/bin/python
 endif
 
 .PHONY: help venv install migrate makemigration downgrade run seed seed-reset \
-        test cov lint format check openapi db-reset clean \
+        test cov lint format audit check openapi db-reset clean \
         build up down logs ps
 
 help: ## Show this help
@@ -68,6 +68,9 @@ lint: ## Lint with ruff
 format: ## Auto-format and fix with ruff
 	$(PY) -m ruff format .
 	$(PY) -m ruff check --fix .
+
+audit: ## Scan dependencies for known vulnerabilities (pip-audit)
+	$(PY) -m pip_audit -r requirements.txt
 
 check: lint test ## Lint + test (CI gate)
 

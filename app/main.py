@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
@@ -17,6 +20,7 @@ from app.core.middleware import (
     SecurityHeadersMiddleware,
 )
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
+from app.database import get_db
 from app.routers import auth, bookmarks, stats
 
 settings = get_settings()
@@ -102,6 +106,16 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["health"], summary="Liveness probe")
     def health() -> dict:
         return {"status": "ok"}
+
+    @app.get("/health/ready", tags=["health"], summary="Readiness probe (checks DB)")
+    def ready(db: Session = Depends(get_db)):
+        """Readiness = the process can actually serve traffic (DB reachable).
+        Returns 503 so orchestrators stop routing if the database is down."""
+        try:
+            db.execute(text("SELECT 1"))
+        except Exception:
+            return JSONResponse(status_code=503, content={"status": "unavailable"})
+        return {"status": "ready"}
 
     return app
 
