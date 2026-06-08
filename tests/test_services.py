@@ -7,13 +7,20 @@ the repository pattern: business logic is testable in isolation.
 
 import pytest
 
-from app.core.errors import AuthError, ConflictError, NotFoundError
+from app.core.errors import (
+    AuthError,
+    ConflictError,
+    NotFoundError,
+    PreconditionFailedError,
+    PreconditionRequiredError,
+)
 from app.models import Bookmark, Tag, User
 from app.repositories.bookmark.interface import BookmarkFilters, IBookmarkRepository
 from app.repositories.tag.interface import ITagRepository
 from app.repositories.user.interface import IUserRepository
 from app.services.auth.service import AuthService
 from app.services.bookmark.service import BookmarkService
+from app.utils.etag.etag import VersionETagService
 from app.utils.security.interface import IPasswordHasher, ITokenProvider
 from app.utils.tags.normalizer import TagNormalizer
 
@@ -65,6 +72,8 @@ class FakeBookmarkRepository(IBookmarkRepository):
     def add(self, bookmark):
         self._seq += 1
         bookmark.id = self._seq
+        if bookmark.version is None:
+            bookmark.version = 1
         self.items[bookmark.id] = bookmark
         return bookmark
 
@@ -73,6 +82,7 @@ class FakeBookmarkRepository(IBookmarkRepository):
         return bm if bm and bm.user_id == user_id else None
 
     def update(self, bookmark):
+        bookmark.version += 1  # mimic version_id_col bump on a real UPDATE
         return bookmark
 
     def delete(self, bookmark):
@@ -146,7 +156,9 @@ def test_login_success_and_failures():
 
 # ── BookmarkService ─────────────────────────────────────────────────────────
 def _bookmark_service():
-    return BookmarkService(FakeBookmarkRepository(), FakeTagRepository(), TagNormalizer())
+    return BookmarkService(
+        FakeBookmarkRepository(), FakeTagRepository(), TagNormalizer(), VersionETagService()
+    )
 
 
 def test_create_normalizes_tags_and_scopes_owner():
@@ -184,3 +196,40 @@ def test_list_pagination_metadata():
     assert page1["total"] == 5
     assert page1["total_pages"] == 3
     assert page1["has_next"] is True and page1["has_prev"] is False
+
+
+# ── Optimistic concurrency (If-Match) ────────────────────────────────────────
+def test_update_requires_if_match():
+    svc = _bookmark_service()
+    bm = svc.create(user_id=1, url="https://x.com", title="X", description=None, tags=[])
+    with pytest.raises(PreconditionRequiredError):
+        svc.update(user_id=1, bookmark_id=bm.id, changes={"title": "Y"}, if_match=None)
+
+
+def test_update_stale_if_match_conflicts():
+    svc = _bookmark_service()
+    bm = svc.create(user_id=1, url="https://x.com", title="X", description=None, tags=[])
+    with pytest.raises(PreconditionFailedError):
+        svc.update(user_id=1, bookmark_id=bm.id, changes={"title": "Y"}, if_match='"999"')
+
+
+def test_update_with_correct_if_match_bumps_version():
+    svc = _bookmark_service()
+    bm = svc.create(user_id=1, url="https://x.com", title="X", description=None, tags=[])
+    assert bm.version == 1
+    updated = svc.update(user_id=1, bookmark_id=bm.id, changes={"title": "Y"}, if_match='"1"')
+    assert updated.version == 2
+
+    # The old ETag is now stale → second update with it conflicts (lost-update guard).
+    with pytest.raises(PreconditionFailedError):
+        svc.update(user_id=1, bookmark_id=bm.id, changes={"title": "Z"}, if_match='"1"')
+
+
+def test_delete_requires_and_validates_if_match():
+    svc = _bookmark_service()
+    bm = svc.create(user_id=1, url="https://x.com", title="X", description=None, tags=[])
+    with pytest.raises(PreconditionRequiredError):
+        svc.delete(user_id=1, bookmark_id=bm.id, if_match=None)
+    with pytest.raises(PreconditionFailedError):
+        svc.delete(user_id=1, bookmark_id=bm.id, if_match='"999"')
+    svc.delete(user_id=1, bookmark_id=bm.id, if_match='"1"')  # correct → succeeds
