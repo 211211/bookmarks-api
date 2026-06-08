@@ -22,10 +22,10 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    # NOTE: the postgres image needs CHOWN/SETUID/SETGID to initialise and drop
+    # privileges, so we don't cap_drop ALL here — only no-new-privileges.
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
 
   api:
     build:
