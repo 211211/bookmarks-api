@@ -19,6 +19,12 @@ def test_request_id_echoed_and_generated(client):
     assert r2.headers["x-request-id"] == rid
 
 
+def test_readiness_probe_ok(client):
+    r = client.get("/health/ready")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ready"
+
+
 def test_oversized_body_rejected(client, alice):
     big = "x" * 2_000_000  # 2 MB > 1 MiB default limit
     r = client.post(
