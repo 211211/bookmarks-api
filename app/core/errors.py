@@ -33,10 +33,12 @@ class AppError(Exception):
         details: dict[str, Any] | None = None,
         code: str | None = None,
         status_code: int | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details
+        self.headers = headers
         if code is not None:
             self.code = code
         if status_code is not None:
@@ -68,6 +70,21 @@ class ValidationAppError(AppError):
     code = "VALIDATION_ERROR"
 
 
+class PreconditionRequiredError(AppError):
+    """The request must be made conditional (missing `If-Match`)."""
+
+    status_code = status.HTTP_428_PRECONDITION_REQUIRED
+    code = "PRECONDITION_REQUIRED"
+
+
+class PreconditionFailedError(AppError):
+    """The supplied `If-Match` did not match the current resource version
+    (optimistic-concurrency conflict — the resource changed under the client)."""
+
+    status_code = status.HTTP_412_PRECONDITION_FAILED
+    code = "PRECONDITION_FAILED"
+
+
 # Maps HTTP status codes to stable, machine-readable error codes.
 _STATUS_TO_CODE: dict[int, str] = {
     400: "BAD_REQUEST",
@@ -76,7 +93,9 @@ _STATUS_TO_CODE: dict[int, str] = {
     404: "NOT_FOUND",
     405: "METHOD_NOT_ALLOWED",
     409: "CONFLICT",
+    412: "PRECONDITION_FAILED",
     422: "VALIDATION_ERROR",
+    428: "PRECONDITION_REQUIRED",
     429: "RATE_LIMITED",
 }
 
@@ -125,6 +144,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_envelope(exc.code, exc.message, exc.details),
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)

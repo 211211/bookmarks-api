@@ -70,7 +70,7 @@ curl -s http://127.0.0.1:8000/health
 Đây là cách nhanh nhất để khẳng định toàn bộ nghiệp vụ vẫn đúng:
 
 ```bash
-make check        # = lint + test  → Kỳ vọng: "All checks passed!" và 47 passed
+make check        # = lint + test  → Kỳ vọng: "All checks passed!" và 59 passed
 make cov          # test kèm báo cáo coverage → Kỳ vọng: ~96%
 ```
 
@@ -86,6 +86,7 @@ Bộ test ánh xạ trực tiếp tới các yêu cầu nghiệp vụ:
 | `tests/test_openapi.py`    | OpenAPI hợp lệ, Swagger phục vụ tại `/docs`, đáp ứng khớp schema. |
 | `tests/test_migrations.py` | Migration chạy sạch (lên/xuống), không lệch model. |
 | `tests/test_cascade.py`    | Xoá user xoá lan (cascade) sang bookmark + bảng liên kết. |
+| `tests/test_etag.py`       | Chống ghi đè (race condition) bằng ETag/`If-Match`: 428/412/200, ngăn lost-update. |
 | `tests/test_services.py`   | Tầng nghiệp vụ (service) kiểm thử độc lập với repository giả. |
 
 ---
@@ -211,6 +212,40 @@ curl -s "http://127.0.0.1:8000/api/bookmarks?per_page=3&cursor=<next_cursor>" -H
 ```
 ✅ Các trang không trùng nhau; trang cuối trả `next_cursor: null` và `has_next: false`.
 
+### 3.6b Chống tranh chấp ghi đè (ETag / If-Match) — *Yêu cầu: tránh race condition khi sửa đồng thời*
+
+```bash
+# Lấy ETag hiện tại của bookmark 1
+ETAG=$(curl -s -D - -o /dev/null "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" | awk -F': ' 'tolower($1)=="etag"{print $2}' | tr -d '\r')
+echo "ETag = $ETAG"
+
+# (a) Sửa mà KHÔNG kèm If-Match
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"title":"x"}'
+```
+✅ **428** (`PRECONDITION_REQUIRED`) — bắt buộc gửi `If-Match`.
+
+```bash
+# (b) Sửa với If-Match cũ/sai
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" -H 'If-Match: "999"' -H 'Content-Type: application/json' -d '{"title":"x"}'
+```
+✅ **412** (`PRECONDITION_FAILED`) — bản ghi đã bị người khác đổi.
+
+```bash
+# (c) Sửa với ETag đúng → thành công, version tăng
+curl -s -X PUT "http://127.0.0.1:8000/api/bookmarks/1" \
+  -H "Authorization: Bearer $TOKEN" -H "If-Match: $ETAG" \
+  -H 'Content-Type: application/json' -d '{"title":"Đã cập nhật có điều kiện"}'
+```
+✅ **200**; trường `version` tăng và trả về `ETag` mới. Dùng lại `ETAG` cũ sẽ bị **412** —
+đây chính là cơ chế **ngăn mất cập nhật (lost update)** khi hai người sửa cùng lúc.
+
+> Cơ chế bảo vệ ở **2 lớp**: (1) tầng ứng dụng so khớp `If-Match` với `version` hiện tại;
+> (2) tầng CSDL dùng cột `version` (`version_id_col`) khiến câu `UPDATE ... WHERE version = <kỳ vọng>`
+> mang tính nguyên tử — nếu có giao dịch khác ghi xen vào, lệnh sẽ thất bại và trả **412**.
+
 ### 3.7 Thống kê (raw SQL) — *Yêu cầu: stats endpoint*
 
 ```bash
@@ -280,6 +315,7 @@ python3 -c "import sqlite3; c=sqlite3.connect('bookmarks.db'); print([r[0] for r
 | 4 | Gắn nhiều tag (M2M) | `test_bookmarks.py`, `test_cascade.py` | Mục 3.4 |
 | 5 | Tìm kiếm & lọc (tag, từ khoá, ngày) | `test_search.py` | Mục 3.5 |
 | 6 | Phân trang | `test_search.py` | Mục 3.6 |
+| 6b | Chống race condition (ETag/If-Match) | `test_etag.py` | Mục 3.6b |
 | 7 | Thống kê bằng raw SQL | `test_stats.py` | Mục 3.7 |
 | 8 | Tài liệu OpenAPI/Swagger tại `/docs` | `test_openapi.py` | Mục 3.8 |
 | 9 | Validation + lỗi nhất quán | `test_errors.py`, `test_openapi.py` | Mục 3.9 |
@@ -290,7 +326,7 @@ python3 -c "import sqlite3; c=sqlite3.connect('bookmarks.db'); print([r[0] for r
 
 ## 5. Checklist nhanh
 
-- [ ] `make check` → lint sạch + **47 passed**
+- [ ] `make check` → lint sạch + **59 passed**
 - [ ] `make cov` → coverage ~96%
 - [ ] `/health` trả `{"status":"ok"}`
 - [ ] Đăng ký (201) / đăng nhập (200) / sai mật khẩu (401) / trùng email (409)
@@ -298,6 +334,7 @@ python3 -c "import sqlite3; c=sqlite3.connect('bookmarks.db'); print([r[0] for r
 - [ ] Tạo / đọc / sửa / xoá bookmark hoạt động (201/200/200/204)
 - [ ] Gắn nhiều tag, tag được chuẩn hoá + bỏ trùng
 - [ ] Lọc theo `tag`, `q`, khoảng ngày; phân trang offset + cursor
+- [ ] Chống race condition: PUT/DELETE thiếu `If-Match` → 428; sai → 412; đúng → 200/204
 - [ ] `/api/bookmarks/stats` trả tổng + top tag + theo tháng
 - [ ] `/docs` và `/openapi.json` truy cập được, có Authorize (JWT)
 - [ ] Lỗi luôn theo cấu trúc `{ "error": { code, message, details } }`

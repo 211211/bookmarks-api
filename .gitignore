@@ -35,3 +35,6 @@ openapi.json
 .idea/
 .vscode/
 .DS_Store
+
+# Claude Code local runtime artifacts
+.claude/

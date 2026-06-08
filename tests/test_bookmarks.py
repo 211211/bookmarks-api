@@ -52,21 +52,29 @@ def test_get_missing_bookmark(client, alice):
 
 
 def test_update_bookmark_replaces_tags(client, alice):
-    created = _create(client, alice["headers"]).json()
+    created_resp = _create(client, alice["headers"])
+    created = created_resp.json()
+    etag = created_resp.headers["etag"]
     resp = client.put(
         f"/api/bookmarks/{created['id']}",
         json={"title": "Updated Title", "tags": ["sql", "backend"]},
-        headers=alice["headers"],
+        headers={**alice["headers"], "If-Match": etag},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["title"] == "Updated Title"
     assert body["tags"] == ["backend", "sql"]  # ordered by name
+    assert body["version"] == 2  # version bumped on update
 
 
 def test_delete_bookmark(client, alice):
-    created = _create(client, alice["headers"]).json()
-    resp = client.delete(f"/api/bookmarks/{created['id']}", headers=alice["headers"])
+    created_resp = _create(client, alice["headers"])
+    created = created_resp.json()
+    etag = created_resp.headers["etag"]
+    resp = client.delete(
+        f"/api/bookmarks/{created['id']}",
+        headers={**alice["headers"], "If-Match": etag},
+    )
     assert resp.status_code == 204
     # Now gone.
     gone = client.get(f"/api/bookmarks/{created['id']}", headers=alice["headers"])

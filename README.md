@@ -16,6 +16,7 @@ consistent error handling, an auto-generated OpenAPI/Swagger spec, and a full te
 - **Tags** — many-to-many; normalized (lowercased, de-duplicated); get-or-create.
 - **Search & filter** — by `tag`, keyword `q` (title/description), and `from`/`to` date range.
 - **Pagination** — offset pagination with total count **and** bonus keyset/cursor pagination.
+- **Optimistic concurrency** — `ETag` + `If-Match` (a version counter) prevents lost updates; conflicting writes get `412`.
 - **Stats** — aggregate counts via **raw SQL** (`JOIN` / `GROUP BY` / `COUNT` / month bucketing).
 - **OpenAPI 3.1** — interactive docs at `/docs`, raw spec at `/openapi.json`.
 - **Consistent errors** — every failure returns `{ "error": { "code", "message", "details" } }`.
@@ -132,8 +133,8 @@ Base URL: `http://127.0.0.1:8000`. All `/api/bookmarks*` routes require
 | GET    | `/api/bookmarks`         |  ✔   | List/search/filter/paginate own bookmarks. |
 | GET    | `/api/bookmarks/stats`   |  ✔   | Aggregate stats (raw SQL). |
 | GET    | `/api/bookmarks/{id}`    |  ✔   | Get one owned bookmark. |
-| PUT    | `/api/bookmarks/{id}`    |  ✔   | Update an owned bookmark. |
-| DELETE | `/api/bookmarks/{id}`    |  ✔   | Delete an owned bookmark (204). |
+| PUT    | `/api/bookmarks/{id}`    |  ✔   | Update an owned bookmark (**requires `If-Match`**). |
+| DELETE | `/api/bookmarks/{id}`    |  ✔   | Delete an owned bookmark (**requires `If-Match`**, 204). |
 | GET    | `/health`                |  —   | Liveness probe. |
 | GET    | `/docs`, `/openapi.json` |  —   | Swagger UI + OpenAPI spec. |
 
@@ -184,6 +185,32 @@ curl -s http://127.0.0.1:8000/api/bookmarks/stats -H "Authorization: Bearer $TOK
 }
 ```
 
+### Optimistic concurrency (ETag / If-Match)
+
+To prevent **lost updates** when two clients edit the same bookmark, every single-bookmark
+response carries a strong **`ETag`** (the resource's version, e.g. `"3"`), and **`PUT`/`DELETE`
+require an `If-Match` header**:
+
+- Missing `If-Match` → **428 Precondition Required**.
+- `If-Match` doesn't match the current version → **412 Precondition Failed** (re-fetch and retry).
+- Match → the write succeeds and the version (and `ETag`) increments.
+
+```bash
+# 1. Read the current ETag
+ETAG=$(curl -s -D - -o /dev/null http://127.0.0.1:8000/api/bookmarks/1 \
+  -H "Authorization: Bearer $TOKEN" | awk -F': ' 'tolower($1)=="etag"{print $2}' | tr -d '\r')
+
+# 2. Conditional update — only applies if nobody changed it since
+curl -s -X PUT http://127.0.0.1:8000/api/bookmarks/1 \
+  -H "Authorization: Bearer $TOKEN" -H "If-Match: $ETAG" \
+  -H 'Content-Type: application/json' -d '{"title":"New title"}'
+```
+
+A stale `If-Match` is rejected even under a genuine concurrent write: the `version` column is a
+SQLAlchemy `version_id_col`, so the conditional `UPDATE ... WHERE version = <expected>` is atomic
+at the database level (a racing commit raises a conflict → `412`), not just an
+application-level check. `*` is accepted as `If-Match` (matches any existing bookmark).
+
 ---
 
 ## Data model
@@ -193,7 +220,7 @@ users ──< bookmarks >──< bookmark_tags >──< tags
 ```
 
 - `users` — `id`, `username` (unique), `email` (unique), `password_hash`, `created_at`.
-- `bookmarks` — `id`, `url`, `title`, `description?`, `user_id` (FK, cascade), `created_at`, `updated_at`.
+- `bookmarks` — `id`, `url`, `title`, `description?`, `user_id` (FK, cascade), `created_at`, `updated_at`, `version` (optimistic-locking counter).
 - `tags` — `id`, `name` (unique, lowercase).
 - `bookmark_tags` — composite PK `(bookmark_id, tag_id)`, both FKs cascade.
 
@@ -210,12 +237,13 @@ make lint         # ruff
 make check        # lint + test (CI gate)
 ```
 
-The suite (**47 tests**) covers registration/login, JWT enforcement (incl. expired and
+The suite (**59 tests**) covers registration/login, JWT enforcement (incl. expired and
 wrong-type tokens), CRUD, **ownership isolation**, search/filter/pagination (offset + cursor),
-the raw-SQL stats endpoint, the consistent error envelope, FK cascade, **migrations run clean**
-(no model drift), and **OpenAPI contract validation** (real responses validated against the
-advertised component schemas). The **service layer is unit-tested in isolation** against
-in-memory fake repositories (`tests/test_services.py`) — no DB, no bcrypt, no HTTP.
+**optimistic concurrency** (ETag/`If-Match`, 412/428, lost-update prevention), the raw-SQL stats
+endpoint, the consistent error envelope, FK cascade, **migrations run clean** (no model drift),
+and **OpenAPI contract validation** (real responses validated against the advertised component
+schemas). The **service layer is unit-tested in isolation** against in-memory fake repositories
+(`tests/test_services.py`) — no DB, no bcrypt, no HTTP.
 
 ---
 
@@ -246,6 +274,7 @@ app/
   utils/
     security/             # interface.py + password.py (bcrypt) + token.py (JWT)
     tags/                 # interface.py + normalizer.py
+    etag/                 # interface.py + etag.py (ETag / If-Match optimistic concurrency)
   repositories/
     user/                 # interface.py (IUserRepository) + repository.py
     bookmark/             #   ...one subpackage per entity...
