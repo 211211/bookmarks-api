@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -30,6 +30,16 @@ class Bookmark(Base):
         onupdate=func.now(),
         nullable=False,
     )
+    # Optimistic-concurrency version. Managed by SQLAlchemy's `version_id_col`
+    # (see __mapper_args__): set to 1 on insert, auto-incremented on every UPDATE,
+    # and added to the UPDATE/DELETE WHERE clause so a concurrent write that
+    # changed the row raises StaleDataError instead of silently clobbering it.
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+    # Enable SQLAlchemy version-counter optimistic locking on this column.
+    __mapper_args__ = {"version_id_col": version}
 
     owner: Mapped["User"] = relationship(back_populates="bookmarks")  # noqa: F821
     # `selectin` batch-loads tags for a page of bookmarks in one extra query,
