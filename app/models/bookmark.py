@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -15,7 +15,9 @@ class Bookmark(Base):
     __tablename__ = "bookmarks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    # 2083 matches the max length Pydantic's HttpUrl accepts, so a value that
+    # passes validation always fits the column (avoids a PostgreSQL write error).
+    url: Mapped[str] = mapped_column(String(2083), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     user_id: Mapped[int] = mapped_column(
@@ -40,6 +42,10 @@ class Bookmark(Base):
 
     # Enable SQLAlchemy version-counter optimistic locking on this column.
     __mapper_args__ = {"version_id_col": version}
+
+    # Composite index for the common access pattern: list a user's bookmarks
+    # ordered by recency (WHERE user_id = ? ORDER BY created_at DESC).
+    __table_args__ = (Index("ix_bookmarks_user_created", "user_id", "created_at"),)
 
     owner: Mapped["User"] = relationship(back_populates="bookmarks")  # noqa: F821
     # `selectin` batch-loads tags for a page of bookmarks in one extra query,
