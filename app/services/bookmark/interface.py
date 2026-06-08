@@ -44,7 +44,20 @@ class IBookmarkService(ABC):
         ...
 
     @abstractmethod
-    def update(self, *, user_id: int, bookmark_id: int, changes: dict[str, Any]) -> Bookmark: ...
+    def update(
+        self,
+        *,
+        user_id: int,
+        bookmark_id: int,
+        changes: dict[str, Any],
+        if_match: str | None,
+    ) -> Bookmark:
+        """Update an owned bookmark. ``if_match`` is the request's `If-Match`
+        header — required, and must match the current version (optimistic
+        concurrency), else ``PreconditionRequiredError`` / ``PreconditionFailedError``."""
+        ...
 
     @abstractmethod
-    def delete(self, *, user_id: int, bookmark_id: int) -> None: ...
+    def delete(self, *, user_id: int, bookmark_id: int, if_match: str | None) -> None:
+        """Delete an owned bookmark, guarded by the same `If-Match` precondition."""
+        ...

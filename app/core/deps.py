@@ -31,6 +31,8 @@ from app.services.bookmark.interface import IBookmarkService
 from app.services.bookmark.service import BookmarkService
 from app.services.stats.interface import IStatsService
 from app.services.stats.service import StatsService
+from app.utils.etag.etag import VersionETagService
+from app.utils.etag.interface import IETagService
 from app.utils.security.interface import IPasswordHasher, ITokenProvider
 from app.utils.security.password import BcryptPasswordHasher
 from app.utils.security.token import JwtTokenProvider
@@ -47,6 +49,7 @@ _token_provider: ITokenProvider = JwtTokenProvider(
     expires_minutes=_settings.jwt_expires_minutes,
 )
 _tag_normalizer: ITagNormalizer = TagNormalizer()
+_etag_service: IETagService = VersionETagService()
 
 
 def get_password_hasher() -> IPasswordHasher:
@@ -59,6 +62,10 @@ def get_token_provider() -> ITokenProvider:
 
 def get_tag_normalizer() -> ITagNormalizer:
     return _tag_normalizer
+
+
+def get_etag_service() -> IETagService:
+    return _etag_service
 
 
 # ── Repositories (per request, bound to the session) ───────────────────────
@@ -91,8 +98,9 @@ def get_bookmark_service(
     bookmarks: IBookmarkRepository = Depends(get_bookmark_repository),
     tags: ITagRepository = Depends(get_tag_repository),
     normalizer: ITagNormalizer = Depends(get_tag_normalizer),
+    etags: IETagService = Depends(get_etag_service),
 ) -> IBookmarkService:
-    return BookmarkService(bookmarks, tags, normalizer)
+    return BookmarkService(bookmarks, tags, normalizer, etags)
 
 
 def get_stats_service(

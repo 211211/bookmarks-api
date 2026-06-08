@@ -5,19 +5,24 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 
-from app.core.deps import get_bookmark_service, get_current_user
+from app.core.deps import get_bookmark_service, get_current_user, get_etag_service
 from app.models import User
 from app.schemas.bookmark import BookmarkCreate, BookmarkOut, BookmarkPage, BookmarkUpdate
 from app.schemas.common import ErrorResponse, PageMeta
 from app.services.bookmark.interface import IBookmarkService
+from app.utils.etag.interface import IETagService
 
 _AUTH_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Authentication required."},
 }
 _NOT_FOUND = {404: {"model": ErrorResponse, "description": "Bookmark not found."}}
 _VALIDATION = {422: {"model": ErrorResponse, "description": "Validation error."}}
+_PRECONDITION = {
+    412: {"model": ErrorResponse, "description": "If-Match did not match the current version."},
+    428: {"model": ErrorResponse, "description": "If-Match header is required."},
+}
 
 router = APIRouter(prefix="/api/bookmarks", tags=["bookmarks"], responses=_AUTH_RESPONSES)
 
@@ -46,8 +51,10 @@ def _to_page(result: dict) -> BookmarkPage:
 )
 def create_bookmark(
     payload: BookmarkCreate,
+    response: Response,
     current_user: User = Depends(get_current_user),
     service: IBookmarkService = Depends(get_bookmark_service),
+    etags: IETagService = Depends(get_etag_service),
 ) -> BookmarkOut:
     bookmark = service.create(
         user_id=current_user.id,
@@ -56,6 +63,7 @@ def create_bookmark(
         description=payload.description,
         tags=payload.tags,
     )
+    response.headers["ETag"] = etags.make_etag(bookmark.version)
     return BookmarkOut.model_validate(bookmark)
 
 
@@ -114,25 +122,34 @@ def list_bookmarks(
 )
 def get_bookmark(
     bookmark_id: int,
+    response: Response,
     current_user: User = Depends(get_current_user),
     service: IBookmarkService = Depends(get_bookmark_service),
+    etags: IETagService = Depends(get_etag_service),
 ) -> BookmarkOut:
-    return BookmarkOut.model_validate(
-        service.get(user_id=current_user.id, bookmark_id=bookmark_id)
-    )
+    bookmark = service.get(user_id=current_user.id, bookmark_id=bookmark_id)
+    response.headers["ETag"] = etags.make_etag(bookmark.version)
+    return BookmarkOut.model_validate(bookmark)
 
 
 @router.put(
     "/{bookmark_id}",
     response_model=BookmarkOut,
     summary="Update a bookmark",
-    responses={**_NOT_FOUND, **_VALIDATION},
+    description="Requires an `If-Match` header carrying the bookmark's current ETag "
+    "(optimistic concurrency — prevents lost updates).",
+    responses={**_NOT_FOUND, **_VALIDATION, **_PRECONDITION},
 )
 def update_bookmark(
     bookmark_id: int,
     payload: BookmarkUpdate,
+    response: Response,
     current_user: User = Depends(get_current_user),
     service: IBookmarkService = Depends(get_bookmark_service),
+    etags: IETagService = Depends(get_etag_service),
+    if_match: str | None = Header(
+        None, alias="If-Match", description="Current ETag of the bookmark, e.g. \"3\"."
+    ),
 ) -> BookmarkOut:
     fields = payload.model_fields_set
     changes: dict = {}
@@ -145,7 +162,10 @@ def update_bookmark(
     if "tags" in fields and payload.tags is not None:
         changes["tags"] = payload.tags
 
-    bookmark = service.update(user_id=current_user.id, bookmark_id=bookmark_id, changes=changes)
+    bookmark = service.update(
+        user_id=current_user.id, bookmark_id=bookmark_id, changes=changes, if_match=if_match
+    )
+    response.headers["ETag"] = etags.make_etag(bookmark.version)
     return BookmarkOut.model_validate(bookmark)
 
 
@@ -153,12 +173,17 @@ def update_bookmark(
     "/{bookmark_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a bookmark",
-    responses={**_NOT_FOUND},
+    description="Requires an `If-Match` header carrying the bookmark's current ETag "
+    "(optimistic concurrency).",
+    responses={**_NOT_FOUND, **_PRECONDITION},
 )
 def delete_bookmark(
     bookmark_id: int,
     current_user: User = Depends(get_current_user),
     service: IBookmarkService = Depends(get_bookmark_service),
+    if_match: str | None = Header(
+        None, alias="If-Match", description="Current ETag of the bookmark, e.g. \"3\"."
+    ),
 ) -> Response:
-    service.delete(user_id=current_user.id, bookmark_id=bookmark_id)
+    service.delete(user_id=current_user.id, bookmark_id=bookmark_id, if_match=if_match)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

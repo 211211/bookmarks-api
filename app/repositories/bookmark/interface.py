@@ -9,6 +9,12 @@ from datetime import date
 from app.models import Bookmark
 
 
+class StaleVersionError(Exception):
+    """Raised by a repository when a write loses an optimistic-locking race
+    (the row's version changed between load and commit). The service layer
+    translates this into a 412 Precondition Failed."""
+
+
 @dataclass(frozen=True)
 class BookmarkFilters:
     """Immutable set of list/search filters passed to the repository."""

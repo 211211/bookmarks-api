@@ -5,11 +5,18 @@ from __future__ import annotations
 from datetime import datetime, time, timezone
 
 from sqlalchemy import asc, desc, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy.sql import Select
 
 from app.models import Bookmark, Tag
-from app.repositories.bookmark.interface import BookmarkFilters, IBookmarkRepository
+from app.repositories.bookmark.interface import (
+    BookmarkFilters,
+    IBookmarkRepository,
+    StaleVersionError,
+)
 
 # Whitelisted sort fields (prevents arbitrary column injection via the API).
 _SORT_FIELDS = {
@@ -37,13 +44,31 @@ class BookmarkRepository(IBookmarkRepository):
         )
 
     def update(self, bookmark: Bookmark) -> Bookmark:
-        self._db.commit()
+        # Force the parent `bookmarks` row into the UPDATE so version_id_col
+        # ALWAYS bumps the version — crucially for tag-only edits, which otherwise
+        # write only the bookmark_tags association table and would skip the
+        # optimistic-lock bump (leaving the ETag frozen and the guard defeated).
+        bookmark.updated_at = datetime.now(timezone.utc)
+        flag_modified(bookmark, "updated_at")
+        # version_id_col adds `AND version = <loaded>` to the UPDATE; a concurrent
+        # commit that bumped the version makes this affect 0 rows -> StaleDataError.
+        # A concurrent tag edit can also collide on the bookmark_tags PK
+        # (IntegrityError); both mean "you lost the race" -> surface as a conflict.
+        try:
+            self._db.commit()
+        except (StaleDataError, IntegrityError) as exc:
+            self._db.rollback()
+            raise StaleVersionError() from exc
         self._db.refresh(bookmark)
         return bookmark
 
     def delete(self, bookmark: Bookmark) -> None:
         self._db.delete(bookmark)
-        self._db.commit()
+        try:
+            self._db.commit()
+        except (StaleDataError, IntegrityError) as exc:
+            self._db.rollback()
+            raise StaleVersionError() from exc
 
     # ── reads ──────────────────────────────────────────────────────────────
     def count(self, user_id: int, filters: BookmarkFilters) -> int:

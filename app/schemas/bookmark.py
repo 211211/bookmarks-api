@@ -50,6 +50,11 @@ class BookmarkOut(BaseModel):
     tags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    version: int = Field(
+        ...,
+        description="Optimistic-concurrency version; also returned as the ETag header.",
+        examples=[1],
+    )
 
     @field_validator("tags", mode="before")
     @classmethod
