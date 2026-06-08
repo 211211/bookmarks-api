@@ -27,14 +27,15 @@ consistent error handling, an auto-generated OpenAPI/Swagger spec, and a full te
 
 | Layer        | Choice                                              |
 |--------------|-----------------------------------------------------|
+| Architecture | Repository pattern — router → service → repository, each behind an interface |
 | Framework    | FastAPI + Uvicorn                                    |
 | ORM          | SQLAlchemy 2.0 (typed models)                       |
 | Migrations   | Alembic                                              |
 | Validation   | Pydantic v2 (`HttpUrl`, `EmailStr`)                 |
-| Auth         | PyJWT + passlib[bcrypt]                              |
+| Auth         | PyJWT (HS256) + passlib `bcrypt_sha256`             |
 | Rate limit   | slowapi                                             |
 | Database     | SQLite (default) / PostgreSQL (Podman)              |
-| Tests        | pytest + jsonschema + openapi-spec-validator        |
+| Tests / lint | pytest + jsonschema + openapi-spec-validator + ruff |
 | Container    | Podman (`Containerfile` + `podman-compose.yml`)     |
 
 ---
@@ -75,11 +76,27 @@ Seeded logins (after step 5): `alice@example.com` / `password123` and `bob@examp
 Requires **Podman** and **podman-compose** (a running `podman machine` on macOS/Windows).
 
 ```bash
-podman-compose up --build
+make up                  # = podman-compose up --build
 ```
 
 This starts PostgreSQL, waits for it to become healthy, applies migrations, and serves the API
-at **http://127.0.0.1:8000/docs**. Tear down with `podman-compose down` (add `-v` to drop data).
+at **http://127.0.0.1:8000/docs**. Then, optionally, load sample data:
+
+```bash
+podman-compose exec -T api python -m scripts.seed
+```
+
+Manage the stack:
+
+```bash
+make ps                  # show containers
+make logs                # tail API logs
+make down                # stop & remove (keeps the DB volume)
+make down ARGS=-v        # ...and drop the database volume too
+```
+
+The API is published on host port **8000**; PostgreSQL on **55432** (the API reaches it
+internally on `db:5432`).
 
 > Docker users can substitute `docker compose -f podman-compose.yml up --build`.
 
@@ -91,8 +108,9 @@ All settings come from environment variables (or `.env`). See [`.env.example`](.
 
 | Variable               | Default                          | Description |
 |------------------------|----------------------------------|-------------|
+| `ENVIRONMENT`          | `development`                    | Outside `development`/`test`, the app **refuses to boot** with a weak `JWT_SECRET`. |
 | `DATABASE_URL`         | `sqlite:///./bookmarks.db`       | SQLAlchemy URL. Use `postgresql+psycopg://…` for Postgres. |
-| `JWT_SECRET`           | dev placeholder                  | **Change in production.** Signing key. |
+| `JWT_SECRET`           | dev placeholder                  | Signing key. In production must be unique and ≥32 chars — generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. |
 | `JWT_ALGORITHM`        | `HS256`                          | JWT algorithm. |
 | `JWT_EXPIRES_MINUTES`  | `1440`                           | Token lifetime. |
 | `RATE_LIMIT_ENABLED`   | `true`                           | Toggle rate limiting. |
@@ -186,31 +204,59 @@ Indexes on `users.username/email`, `tags.name`, `bookmarks.user_id`, and `bookma
 ## Testing
 
 ```bash
-pytest            # or: make test
+make test         # or: pytest
+make cov          # tests with a coverage report
+make lint         # ruff
+make check        # lint + test (CI gate)
 ```
 
-The suite (>20 tests) covers registration/login, JWT enforcement, CRUD, **ownership
-isolation**, search/filter/pagination (offset + cursor), the raw-SQL stats endpoint, the
-consistent error envelope, that **migrations run clean**, and **OpenAPI contract validation**
-(real responses are validated against the advertised component schemas).
+The suite (**47 tests**) covers registration/login, JWT enforcement (incl. expired and
+wrong-type tokens), CRUD, **ownership isolation**, search/filter/pagination (offset + cursor),
+the raw-SQL stats endpoint, the consistent error envelope, FK cascade, **migrations run clean**
+(no model drift), and **OpenAPI contract validation** (real responses validated against the
+advertised component schemas). The **service layer is unit-tested in isolation** against
+in-memory fake repositories (`tests/test_services.py`) — no DB, no bcrypt, no HTTP.
 
 ---
+
+## Architecture (repository pattern)
+
+Each request flows through clean layers, each depending on the *interface* of the one below:
+
+```
+HTTP router  →  service (business logic)  →  repository (persistence)  →  ORM model
+                         ↘ utils (password hasher, token provider, tag normalizer)
+```
+
+Every model/service/repository/util has a dedicated `interface.py` (an abstract base class)
+and an implementation, so services are decoupled from persistence and unit-testable with fakes
+(see `tests/test_services.py` — no DB, no bcrypt). Dependency injection is wired in
+`app/core/deps.py`.
 
 ## Project structure
 
 ```
 app/
-  main.py            # app factory, middleware, exception handlers
-  config.py          # env-driven settings
-  database.py        # engine, session, Base
-  models/            # User, Bookmark, Tag, bookmark_tags
-  schemas/           # Pydantic request/response models
-  core/              # security, deps (auth), errors, rate limiting
-  crud/              # data-access layer (incl. raw-SQL stats)
-  routers/           # auth, bookmarks, stats
-alembic/             # migration environment + versions
-tests/               # pytest suite
-scripts/seed.py      # sample-data seeder
+  main.py                 # app factory, middleware, exception handlers
+  config.py               # env-driven settings
+  database.py             # engine, session, Base
+  models/                 # User, Bookmark, Tag, bookmark_tags (ORM)
+  schemas/                # Pydantic request/response models
+  core/                   # deps (DI wiring), errors, rate limiting
+  utils/
+    security/             # interface.py + password.py (bcrypt) + token.py (JWT)
+    tags/                 # interface.py + normalizer.py
+  repositories/
+    user/                 # interface.py (IUserRepository) + repository.py
+    bookmark/             #   ...one subpackage per entity...
+    tag/  ·  stats/
+  services/
+    auth/                 # interface.py (IAuthService) + service.py
+    bookmark/  ·  stats/
+  routers/                # auth, bookmarks, stats (depend on service interfaces)
+alembic/                  # migration environment + versions
+tests/                    # pytest suite (incl. service unit tests with fakes)
+scripts/seed.py           # sample-data seeder
 Containerfile · podman-compose.yml · entrypoint.sh
 ```
 
@@ -220,11 +266,33 @@ Containerfile · podman-compose.yml · entrypoint.sh
 
 - **Ownership scoping** returns `404` (not `403`) for another user's bookmark so the API never
   reveals that the resource exists.
-- **Tag normalization** happens at the schema boundary; tags are stored once and shared.
+- **Tag normalization** is centralized in `ITagNormalizer` (lowercase, trim, de-duplicate);
+  tags are stored once and shared via `get_or_create`.
 - **Stats** uses raw SQL with a dialect-aware month expression (`strftime` on SQLite,
   `to_char` on PostgreSQL).
 - **N+1** is avoided by `selectin` loading of tags and `JOIN`-based filtering with a single
   count query.
+- **Login is constant-time** for unknown emails (dummy-hash verification) to avoid leaking
+  which accounts exist via response timing.
+
+## Make targets
+
+Run `make` (or `make help`) for the full list. Common ones:
+
+| Target            | Description |
+|-------------------|-------------|
+| `make install`    | Create `.venv` + install dev dependencies. |
+| `make migrate`    | Apply migrations (`alembic upgrade head`). |
+| `make run`        | Run the dev server with autoreload. |
+| `make seed`       | Populate sample data. |
+| `make test` / `cov` / `lint` / `check` | Test, coverage, lint, and the combined CI gate. |
+| `make up` / `down` / `logs` / `ps` / `build` | Podman stack (API + PostgreSQL). |
+| `make openapi`    | Export the OpenAPI spec to `openapi.json`. |
+| `make db-reset` / `clean` | Reset the local DB / remove caches & artifacts. |
+
+## Manual testing
+
+For a step-by-step manual walkthrough of every endpoint, see **[TESTING.md](TESTING.md)**.
 
 ## License
 

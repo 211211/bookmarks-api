@@ -1,21 +1,18 @@
 """Bookmark routes: CRUD + search/filter/pagination. All scoped to the
-authenticated user via the `get_current_user` dependency."""
+authenticated user; business logic lives in the bookmark service."""
 
 from __future__ import annotations
 
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query, Response, status
-from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
-from app.crud import bookmarks as crud
-from app.database import get_db
+from app.core.deps import get_bookmark_service, get_current_user
 from app.models import User
 from app.schemas.bookmark import BookmarkCreate, BookmarkOut, BookmarkPage, BookmarkUpdate
 from app.schemas.common import ErrorResponse, PageMeta
+from app.services.bookmark.interface import IBookmarkService
 
-# Error responses shared across the authenticated bookmark routes.
 _AUTH_RESPONSES = {
     401: {"model": ErrorResponse, "description": "Authentication required."},
 }
@@ -50,15 +47,14 @@ def _to_page(result: dict) -> BookmarkPage:
 def create_bookmark(
     payload: BookmarkCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    service: IBookmarkService = Depends(get_bookmark_service),
 ) -> BookmarkOut:
-    bookmark = crud.create_bookmark(
-        db,
+    bookmark = service.create(
         user_id=current_user.id,
         url=str(payload.url),
         title=payload.title,
         description=payload.description,
-        tag_names=payload.tags,
+        tags=payload.tags,
     )
     return BookmarkOut.model_validate(bookmark)
 
@@ -70,7 +66,7 @@ def create_bookmark(
 )
 def list_bookmarks(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    service: IBookmarkService = Depends(get_bookmark_service),
     tag: str | None = Query(None, description="Filter by exact tag name."),
     q: str | None = Query(None, description="Keyword searched in title and description."),
     date_from: date | None = Query(
@@ -96,8 +92,7 @@ def list_bookmarks(
         "descending and `sort` is ignored; follow `next_cursor` for the next page.",
     ),
 ) -> BookmarkPage:
-    result = crud.list_bookmarks(
-        db,
+    result = service.list(
         user_id=current_user.id,
         tag=tag,
         q=q,
@@ -120,10 +115,11 @@ def list_bookmarks(
 def get_bookmark(
     bookmark_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    service: IBookmarkService = Depends(get_bookmark_service),
 ) -> BookmarkOut:
-    bookmark = crud.get_owned_bookmark(db, user_id=current_user.id, bookmark_id=bookmark_id)
-    return BookmarkOut.model_validate(bookmark)
+    return BookmarkOut.model_validate(
+        service.get(user_id=current_user.id, bookmark_id=bookmark_id)
+    )
 
 
 @router.put(
@@ -136,10 +132,8 @@ def update_bookmark(
     bookmark_id: int,
     payload: BookmarkUpdate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    service: IBookmarkService = Depends(get_bookmark_service),
 ) -> BookmarkOut:
-    bookmark = crud.get_owned_bookmark(db, user_id=current_user.id, bookmark_id=bookmark_id)
-
     fields = payload.model_fields_set
     changes: dict = {}
     if "url" in fields and payload.url is not None:
@@ -151,7 +145,7 @@ def update_bookmark(
     if "tags" in fields and payload.tags is not None:
         changes["tags"] = payload.tags
 
-    bookmark = crud.update_bookmark(db, bookmark=bookmark, changes=changes)
+    bookmark = service.update(user_id=current_user.id, bookmark_id=bookmark_id, changes=changes)
     return BookmarkOut.model_validate(bookmark)
 
 
@@ -164,8 +158,7 @@ def update_bookmark(
 def delete_bookmark(
     bookmark_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    service: IBookmarkService = Depends(get_bookmark_service),
 ) -> Response:
-    bookmark = crud.get_owned_bookmark(db, user_id=current_user.id, bookmark_id=bookmark_id)
-    crud.delete_bookmark(db, bookmark=bookmark)
+    service.delete(user_id=current_user.id, bookmark_id=bookmark_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

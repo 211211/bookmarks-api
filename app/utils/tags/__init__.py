@@ -1,0 +1,1 @@
+"""Tag normalization helper."""

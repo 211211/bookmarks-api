@@ -13,13 +13,14 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 
-from app.core.security import hash_password
-from app.crud.tags import get_or_create_tags
 from app.database import SessionLocal
 from app.models import Bookmark, Tag, User
 from app.models.associations import bookmark_tags
+from app.repositories.tag.repository import TagRepository
+from app.utils.security.password import BcryptPasswordHasher
 
 SEED_PASSWORD = "password123"
+_hasher = BcryptPasswordHasher()
 
 # (title, url, description, [tags], created_at) for user "alice".
 ALICE_BOOKMARKS = [
@@ -59,7 +60,7 @@ BOB_BOOKMARKS = [
 
 
 def _create_user(db, username: str, email: str) -> User:
-    user = User(username=username, email=email, password_hash=hash_password(SEED_PASSWORD))
+    user = User(username=username, email=email, password_hash=_hasher.hash(SEED_PASSWORD))
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -67,6 +68,7 @@ def _create_user(db, username: str, email: str) -> User:
 
 
 def _add_bookmarks(db, user: User, rows) -> None:
+    tags_repo = TagRepository(db)
     for title, url, description, tags, created in rows:
         bookmark = Bookmark(
             url=url,
@@ -76,7 +78,7 @@ def _add_bookmarks(db, user: User, rows) -> None:
             created_at=created,
             updated_at=created,
         )
-        bookmark.tags = get_or_create_tags(db, tags)
+        bookmark.tags = tags_repo.get_or_create(tags)
         db.add(bookmark)
     db.commit()
 

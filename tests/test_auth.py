@@ -5,8 +5,15 @@ from datetime import datetime, timedelta, timezone
 import jwt as pyjwt
 
 from app.config import get_settings
-from app.core.security import create_access_token
+from app.utils.security.token import JwtTokenProvider
 from tests.conftest import auth_header, register
+
+
+def _token_provider() -> JwtTokenProvider:
+    s = get_settings()
+    return JwtTokenProvider(
+        secret=s.jwt_secret, algorithm=s.jwt_algorithm, expires_minutes=s.jwt_expires_minutes
+    )
 
 
 def test_register_success(client):
@@ -73,7 +80,7 @@ def test_protected_route_rejects_garbage_token(client):
 
 
 def test_expired_token_rejected(client, alice):
-    token = create_access_token(alice["user"]["id"], expires_minutes=-1)
+    token = _token_provider().create_access_token(alice["user"]["id"], expires_minutes=-1)
     resp = client.get("/api/bookmarks", headers=auth_header(token))
     assert resp.status_code == 401
     assert resp.json()["error"]["code"] == "AUTHENTICATION_ERROR"

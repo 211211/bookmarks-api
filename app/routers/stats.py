@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
-from app.crud import stats as crud
-from app.database import get_db
+from app.core.deps import get_current_user, get_stats_service
 from app.models import User
 from app.schemas.common import ErrorResponse
 from app.schemas.stats import StatsResponse
+from app.services.stats.interface import IStatsService
 
 router = APIRouter(prefix="/api/bookmarks", tags=["bookmarks"])
 
@@ -24,7 +22,6 @@ router = APIRouter(prefix="/api/bookmarks", tags=["bookmarks"])
 )
 def get_stats(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    service: IStatsService = Depends(get_stats_service),
 ) -> StatsResponse:
-    data = crud.get_stats(db, user_id=current_user.id)
-    return StatsResponse(**data)
+    return StatsResponse(**service.get_stats(user_id=current_user.id))

@@ -3,23 +3,16 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response, status
-from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.core.deps import get_auth_service
 from app.core.rate_limit import limiter
-from app.core.security import create_access_token
-from app.crud import users
-from app.database import get_db
 from app.schemas.auth import AuthResponse, LoginRequest, RegisterRequest, UserOut
 from app.schemas.common import ErrorResponse
+from app.services.auth.interface import IAuthService
 
 settings = get_settings()
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-
-def _auth_response(user) -> AuthResponse:
-    token = create_access_token(user.id)
-    return AuthResponse(user=UserOut.model_validate(user), token=token)
 
 
 @router.post(
@@ -38,12 +31,12 @@ def register(
     request: Request,
     response: Response,
     payload: RegisterRequest,
-    db: Session = Depends(get_db),
+    service: IAuthService = Depends(get_auth_service),
 ) -> AuthResponse:
-    user = users.create_user(
-        db, username=payload.username, email=payload.email, password=payload.password
+    user, token = service.register(
+        username=payload.username, email=payload.email, password=payload.password
     )
-    return _auth_response(user)
+    return AuthResponse(user=UserOut.model_validate(user), token=token)
 
 
 @router.post(
@@ -61,7 +54,7 @@ def login(
     request: Request,
     response: Response,
     payload: LoginRequest,
-    db: Session = Depends(get_db),
+    service: IAuthService = Depends(get_auth_service),
 ) -> AuthResponse:
-    user = users.authenticate(db, email=payload.email, password=payload.password)
-    return _auth_response(user)
+    user, token = service.login(email=payload.email, password=payload.password)
+    return AuthResponse(user=UserOut.model_validate(user), token=token)
