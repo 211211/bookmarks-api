@@ -6,7 +6,7 @@ import jwt as pyjwt
 
 from app.config import get_settings
 from app.utils.security.token import JwtTokenProvider
-from tests.conftest import auth_header, register
+from tests.conftest import TEST_PASSWORD, auth_header, register
 
 
 def _token_provider() -> JwtTokenProvider:
@@ -31,7 +31,7 @@ def test_register_duplicate_email(client):
     register(client)
     resp = client.post(
         "/api/auth/register",
-        json={"username": "alice2", "email": "alice@example.com", "password": "password123"},
+        json={"username": "alice2", "email": "alice@example.com", "password": TEST_PASSWORD},
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "CONFLICT"
@@ -48,11 +48,44 @@ def test_register_validation_error(client):
     assert "field" in body["error"]["details"]
 
 
+def test_password_policy_rejects_common_and_similar(client):
+    # Common password.
+    r = client.post(
+        "/api/auth/register",
+        json={"username": "carol", "email": "carol@example.com", "password": "password123"},
+    )
+    assert r.status_code == 422
+    # Password contains the username.
+    r = client.post(
+        "/api/auth/register",
+        json={"username": "daniel", "email": "d@example.com", "password": "daniel-secret"},
+    )
+    assert r.status_code == 422
+    # Too short (<10).
+    r = client.post(
+        "/api/auth/register",
+        json={"username": "erin", "email": "erin@example.com", "password": "Sh0rt!"},
+    )
+    assert r.status_code == 422
+
+
+def test_token_has_unique_jti(client):
+    from app.config import get_settings
+    from app.utils.security.token import JwtTokenProvider
+
+    s = get_settings()
+    tp = JwtTokenProvider(secret=s.jwt_secret, algorithm=s.jwt_algorithm, expires_minutes=5)
+    import jwt as pyjwt
+
+    claims = pyjwt.decode(tp.create_access_token(1), s.jwt_secret, algorithms=[s.jwt_algorithm])
+    assert "jti" in claims and len(claims["jti"]) >= 16
+
+
 def test_login_success(client):
     register(client)
     resp = client.post(
         "/api/auth/login",
-        json={"email": "alice@example.com", "password": "password123"},
+        json={"email": "alice@example.com", "password": TEST_PASSWORD},
     )
     assert resp.status_code == 200
     assert resp.json()["token"]
