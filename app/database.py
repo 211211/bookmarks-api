@@ -14,11 +14,23 @@ settings = get_settings()
 # pool; other databases ignore it.
 connect_args = {"check_same_thread": False} if settings.is_sqlite else {}
 
+# Connection-pool tuning only applies to real client/server databases; SQLite
+# uses a SingletonThreadPool/StaticPool and ignores these kwargs.
+pool_kwargs: dict = {}
+if not settings.is_sqlite:
+    pool_kwargs = {
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+        "pool_timeout": settings.db_pool_timeout,
+    }
+
 engine = create_engine(
     settings.database_url,
     connect_args=connect_args,
     pool_pre_ping=True,
     future=True,
+    **pool_kwargs,
 )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
