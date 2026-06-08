@@ -4,6 +4,7 @@ import pytest
 
 from app.core.errors import TooManyAttemptsError
 from app.utils.login_guard.guard import InMemoryLoginGuard
+from tests.conftest import TEST_PASSWORD
 
 
 class _Clock:
@@ -76,7 +77,7 @@ def test_http_login_lockout_returns_429(client, alice, monkeypatch):
 
     # Now locked — even the correct password is refused with 429 + Retry-After.
     r = client.post(
-        "/api/auth/login", json={"email": "alice@example.com", "password": "password123"}
+        "/api/auth/login", json={"email": "alice@example.com", "password": TEST_PASSWORD}
     )
     assert r.status_code == 429
     assert r.json()["error"]["code"] == "TOO_MANY_ATTEMPTS"

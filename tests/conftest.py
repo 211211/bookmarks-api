@@ -69,7 +69,12 @@ def client():
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
-def register(client, username="alice", email="alice@example.com", password="password123"):
+# A policy-compliant password (>=10 chars, not common, not similar to the test
+# usernames/emails) used across the suite.
+TEST_PASSWORD = "Str0ng-Test-Pw1"
+
+
+def register(client, username="alice", email="alice@example.com", password=TEST_PASSWORD):
     """Register a user and return the parsed JSON response."""
     resp = client.post(
         "/api/auth/register",
@@ -92,5 +97,5 @@ def alice(client):
 
 @pytest.fixture
 def bob(client):
-    data = register(client, username="bob", email="bob@example.com", password="password456")
+    data = register(client, username="bob", email="bob@example.com", password=TEST_PASSWORD)
     return {"user": data["user"], "token": data["token"], "headers": auth_header(data["token"])}

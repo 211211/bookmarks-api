@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -27,6 +28,9 @@ class JwtTokenProvider(ITokenProvider):
             "iat": int(now.timestamp()),
             "exp": int(expire.timestamp()),
             "type": TOKEN_TYPE,
+            # Unique token id — enables a future revocation deny-list without a
+            # token format change.
+            "jti": uuid.uuid4().hex,
         }
         return jwt.encode(payload, self._secret, algorithm=self._algorithm)
 
