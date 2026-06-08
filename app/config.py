@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_default: str = "120/minute"
     rate_limit_auth: str = "15/minute"
+    # Optional shared backing store (e.g. "redis://host:6379") so limits are
+    # correct across multiple workers/replicas. Defaults to in-process memory.
+    rate_limit_storage_uri: str | None = None
     # When True, the rate limiter derives the client IP from X-Forwarded-For
     # (only safe behind a trusted reverse proxy that sets it).
     trust_proxy_headers: bool = False
